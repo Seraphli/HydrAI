@@ -32,6 +32,7 @@ class HydrAI(object):
                 self.replays["bad"].add(replay)
             else:
                 self.replays["normal"].add(replay)
+        return self.baseline.value
 
     def play_one_game(self):
         replay = Replay()
@@ -48,3 +49,10 @@ class HydrAI(object):
             if self.env.is_done():
                 break
         return replay
+
+    def train(self):
+        loss = []
+        loss.append(self.nns["good"].train(self.replays["good"].data))
+        loss.append(self.nns["normal"].train(self.replays["normal"].data))
+        loss.append(self.nns["bad"].train(self.replays["bad"].data))
+        return loss
