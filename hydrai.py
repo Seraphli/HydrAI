@@ -1,35 +1,50 @@
-class Replay(object):
-    """docstring for Replay"""
-
-    def __init__(self, arg):
-        super(Replay, self).__init__()
-        self.arg = arg
-
-    def update(self, record, terminal):
-        # add record
-        if terminal:
-            self.score = record.score
+from util import RecentAvg
+from replay import Replay, ReplayPack
+from nn import NN
+import numpy as np
 
 
-def play_one_game():
-    # intergrate with environment
-    return Replay()
+class HydrAI(object):
+    HEADS_N = 3
 
+    def __init__(self):
+        self.replay_size = 40
+        self.baseline = RecentAvg(size=HydrAI.HEADS_N *
+                                       self.replay_size, init=0)
+        self.replays = {
+            "good": ReplayPack(self.replay_size),
+            "normal": ReplayPack(self.replay_size),
+            "bad": ReplayPack(self.replay_size)
+        }
+        self.nns = {
+            "good": NN(),
+            "normal": NN(),
+            "bad": NN()
+        }
 
-baseline = Average(init=0)
+    def collect_replay(self):
+        for _ in range(HydrAI.HEADS_N * self.replay_size):
+            replay = self.play_one_game()
+            self.baseline.update(replay.score)
+            if replay.score > self.baseline.value + self.baseline.range * 0.25:
+                self.replays["good"].add(replay)
+            elif replay.score < self.baseline.value - self.baseline.range * 0.25:
+                self.replays["bad"].add(replay)
+            else:
+                self.replays["normal"].add(replay)
 
-good = queue(max=20)
-normal = queue(max=20)
-bad = queue(max=20)
-
-for _ in range(MAX_ITER):
-    replay = play_one_game()
-    baseline.update(replay.score)
-    if replay.score > baseline.value + baseline.range * 0.25:
-        good.append(replay)
-    elif replay.score < baseline.value - baseline.range * 0.25:
-        bad.append(replay)
-    else:
-        normal.append(replay)
-
-
+    def play_one_game(self):
+        replay = Replay()
+        self.env.reset()
+        while True:
+            s = self.env.step()
+            p_g = self.nns["good"].predict(s)
+            p_n = self.nns["normal"].predict(s)
+            p_b = self.nns["bad"].predict(s)
+            p = p_g + p_n - p_b
+            p /= np.sum(p)
+            a = np.argmax(p)
+            replay.add(s, a)
+            if self.env.is_done():
+                break
+        return replay
