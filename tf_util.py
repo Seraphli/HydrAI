@@ -5,6 +5,7 @@ _BATCH_NORM_EPSILON = 1e-5
 _MOMENTUM = 0.9
 
 
+# Reference from https://github.com/tensorflow/models/blob/master/official/resnet/resnet_model.py
 def batch_norm_relu(inputs, is_training, data_format):
     """Performs a batch normalization followed by a ReLU."""
     # We set fused=True for a significant performance boost. See

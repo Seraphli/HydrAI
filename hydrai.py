@@ -21,11 +21,15 @@ class HydrAI(object):
             "normal": NN(),
             "bad": NN()
         }
+        self.a = list(range(10))
 
     def collect_replay(self):
+        collection = []
         for _ in range(HydrAI.HEADS_N * self.replay_size):
             replay = self.play_one_game()
             self.baseline.update(replay.score)
+            collection.append(replay)
+        for replay in collection:
             if replay.score > self.baseline.value + self.baseline.range * 0.25:
                 self.replays["good"].add(replay)
             elif replay.score < self.baseline.value - self.baseline.range * 0.25:
@@ -38,14 +42,15 @@ class HydrAI(object):
         replay = Replay()
         self.env.reset()
         while True:
-            s = self.env.step()
+            s, r, t, _ = self.env.step()
             p_g = self.nns["good"].predict(s)
             p_n = self.nns["normal"].predict(s)
             p_b = self.nns["bad"].predict(s)
             p = p_g + p_n - p_b
             p /= np.sum(p)
-            a = np.argmax(p)
+            a = np.random.choice(self.a, p=p)
             replay.add(s, a)
+            replay.score += r
             if self.env.is_done():
                 break
         return replay
