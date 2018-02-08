@@ -35,15 +35,14 @@ class NN(object):
     def _build_net(self, mode):
         inputs = self._build_input()
         is_training = mode == "training"
-        data_format = ('channels_first' if tf.test.is_built_with_cuda()
-                       else 'channels_last')
+        data_format = "channels_last"
         net = inputs["s"]
         net = conv2d_bn_relu(net, 32, 8, 4, is_training, data_format)
         net = conv2d_bn_relu(net, 64, 4, 2, is_training, data_format)
         net = conv2d_bn_relu(net, 64, 3, 1, is_training, data_format)
         net = tf.layers.flatten(net)
         net = tf.layers.dense(net, 512)
-        net = batch_norm_relu(net, is_training, data_format)
+        net = dense_batch_norm_relu(net, is_training)
         net = tf.layers.dense(net, self.output_size)
 
         predict = tf.nn.softmax(net)
