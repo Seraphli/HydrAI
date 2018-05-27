@@ -1,140 +1,133 @@
-from tf_util import *
-from util import *
-from collections import namedtuple
-import os
-import json
-import datetime
+import tensorflow as tf
+from tfac.queue_input import QueueInput
 
-_MOMENTUM = 0.9
-
-NNArgs = namedtuple("NNArgs", "action, env")
+class ModeKeys(object):
+    TRAIN = 'train'
+    PREDICT = 'predict'
 
 
 class NN(object):
-    def __init__(self, args):
-        self.args = args
-        self.output_size = self.args.action
-
-    def make_session(self):
-        """Make and return a tensorflow session
-
-        Returns:
-            Session: tensorflow session
-        """
-        gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.5)
-        cfg = tf.ConfigProto(gpu_options=gpu_options)
-        self.sess = tf.Session(config=cfg)
-        return self.sess
-
-    def _build_input(self):
-        s = tf.placeholder(tf.uint8, [None, 84, 84, 5], name='s')
-        a = tf.placeholder(tf.uint8, [None, ], name='a')
-        inputs = {"s": s, "a": a}
-        return inputs
-
-    def _build_net(self, mode):
-        inputs = self._build_input()
-        is_training = mode == "training"
-        data_format = "channels_last"
-        net = inputs["s"]
-        net = conv2d_bn_relu(net, 32, 8, 4, is_training, data_format)
-        net = conv2d_bn_relu(net, 64, 4, 2, is_training, data_format)
-        net = conv2d_bn_relu(net, 64, 3, 1, is_training, data_format)
-        net = tf.layers.flatten(net)
-        net = tf.layers.dense(net, 512)
-        net = dense_batch_norm_relu(net, is_training)
-        net = tf.layers.dense(net, self.output_size)
-
-        predict = tf.nn.softmax(net)
-
-        if mode == "predict":
-            return predict
-
-        a = tf.one_hot(inputs["a"], self.output_size)
-        cross_entropy = tf.losses.softmax_cross_entropy(
-            logits=net, onehot_labels=a)
-        l2_loss = 10 ** -4 * tf.add_n([tf.nn.l2_loss(v)
-                                       for v in tf.trainable_variables()])
-        loss = cross_entropy + l2_loss
-
-        global_step = tf.train.get_or_create_global_step()
-        boundaries = [4 * 10 ** 5, 6 * 10 ** 5]
-        values = [10 ** -2, 10 ** -3, 10 ** -4]
-        learning_rate = tf.train.piecewise_constant(
-            tf.cast(global_step, tf.int32), boundaries, values)
-
-        optimizer = tf.train.MomentumOptimizer(
-            learning_rate=learning_rate,
-            momentum=_MOMENTUM)
-
-        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-        with tf.control_dependencies(update_ops):
-            train_op = optimizer.minimize(loss, global_step)
-        return predict, loss, train_op
-
-    def predict(self, data):
-        self.model = self._build_net("predict")
-        if not self.load_model():
-            init = tf.global_variables_initializer()
-            self.sess.run(init)
+    def __init__(self, feature_size, action_size, sample_fn):
+        self.feature_size = feature_size
+        self.action_size = action_size
+        self.sample_fn = sample_fn
+        self.build_input()
+        idx, batch_features, batch_labels = self.qi.build_op(32)
+        idx, pred_features, pred_labels = self.qi.build_op(1)
+        self.train_net = self.build_net(batch_features, batch_labels,
+                                        ModeKeys.TRAIN, False, "mcts_")
+        self.pred_net = self.build_net(pred_features, pred_labels,
+                                       ModeKeys.PREDICT, tf.AUTO_REUSE, "mcts_")
+        self.sess = tf.InteractiveSession()
+        self.saver = tf.train.Saver(max_to_keep=10)
+        init_op = tf.global_variables_initializer()
+        self.sess.run(init_op)
         self.sess.graph.finalize()
+        self.is_qi_run = False
 
-    def train(self, data):
-        self.model = self._build_net("training")
-        if not self.load_model():
-            init = tf.global_variables_initializer()
-            self.sess.run(init)
-        self.sess.graph.finalize()
+    def run(self):
+        self.qi.run(self.sess, self.sample_fn)
 
-    def load_model(self):
-        def clean_up():
-            self.score = None
-            U.main_logger.info("No model loaded")
+    def train(self):
+        if not self.is_qi_run:
+            self.run()
+        self.sess.run(self.train_net["train_op"])
 
-        self.saver = tf.train.Saver(max_to_keep=50)
-        model_path = get_path('model/' + self.args.env)
-        subdir = next(os.walk(model_path))[1]
-        if subdir:
-            clean_up()
-            return False
+    def predict(self):
+        return self.sess.run(self.pred_net["predictions"])
 
-        cmd = input("Found {} saved model(s), "
-                    "do you want to load? [y/N]".format(len(subdir)))
-        if not ('y' in cmd or 'Y' in cmd):
-            clean_up()
-            return False
+    def build_input(self):
+        self.features = {
+            "s": tf.placeholder(tf.float32, [None, *self.feature_size])
+        }
 
-        def ls_model():
-            print("Choose one:")
-            for i in range(len(subdir)):
-                state_fn = model_path + '/' + subdir[i] + '/state.json'
-                with open(state_fn, 'r') as f:
-                    state = json.load(f)
-                print("[{}]: Score: {}, Path: {}".
-                      format(i, state['score'], subdir[i]))
+        self.labels = {
+            "pi": tf.placeholder(tf.float32, [None, self.action_size]),
+            "z": tf.placeholder(tf.float32, [None, 1]),
+        }
+        self.qi = QueueInput(self.features, self.labels, [400, 20])
 
-        index = 0
-        if len(subdir) > 1:
-            ls_model()
-            index = int(input("Index: "))
-        load_path = model_path + '/' + subdir[index]
-        state_fn = load_path + '/state.json'
-        with open(state_fn, 'r') as f:
-            state = json.load(f)
+    def build_net(self, features, labels, mode, reuse, prefix):
+        training = mode == ModeKeys.TRAIN
+        with tf.variable_scope(prefix, reuse=reuse):
+            w_init = tf.contrib.layers.xavier_initializer()
+            b_init = tf.constant_initializer(0.1)
+            x = features["s"]
+            x = tf.layers.conv2d(
+                x, 32, 8, 4, activation=tf.nn.relu, name="conv_1",
+                kernel_initializer=w_init, bias_initializer=b_init)
+            x = tf.layers.batch_normalization(
+                x, training=training,
+                momentum=0.997, epsilon=1e-5, name="bn_1")
+            x = tf.layers.conv2d(
+                x, 64, 4, 2, activation=tf.nn.relu, name="conv_2",
+                kernel_initializer=w_init, bias_initializer=b_init)
+            x = tf.layers.batch_normalization(
+                x, training=training,
+                momentum=0.997, epsilon=1e-5, name="bn_2")
+            x = tf.layers.conv2d(
+                x, 64, 3, 1, activation=tf.nn.relu, name="conv_3",
+                kernel_initializer=w_init, bias_initializer=b_init)
+            x = tf.layers.batch_normalization(
+                x, training=training,
+                momentum=0.997, epsilon=1e-5, name="bn_3")
+            pi = tf.layers.flatten(x)
+            pi = tf.layers.dense(pi, 512, activation=tf.nn.relu,
+                                 name="pi_dense_1")
+            pi = tf.layers.batch_normalization(
+                pi, training=training,
+                momentum=0.997, epsilon=1e-5, name="bn_4")
+            pi = tf.layers.dense(pi, self.action_size,
+                                 name="pi_dense_2")
+            v = tf.layers.flatten(x)
+            v = tf.layers.dense(v, 512, activation=tf.nn.relu,
+                                name="v_dense_1")
+            v = tf.layers.batch_normalization(
+                v, training=training,
+                momentum=0.997, epsilon=1e-5, name="bn_5")
+            v = tf.layers.dense(v, 1, name="v_dense_2")
+            v = tf.nn.sigmoid(v)
+
+            predictions = {
+                "pi": tf.nn.softmax(pi, name="pi"),
+                "v": tf.identity(v, name="v")
+            }
+
+            if mode == ModeKeys.PREDICT:
+                net = {"predictions": predictions}
+                return net
+
+            with tf.name_scope("loss"):
+                epsilon = 1e-10
+                mse_loss = tf.losses.mean_squared_error(labels["z"], v)
+                cross_entropy = (labels["pi"] + epsilon) * tf.log(pi + epsilon)
+                ce_loss = tf.reduce_mean(-tf.reduce_sum(cross_entropy, 1))
+                l2_loss = 1e-4 * tf.add_n([tf.nn.l2_loss(v)
+                                           for v in tf.trainable_variables()])
+                loss = mse_loss + ce_loss + l2_loss
+
+            optimizer = tf.train.AdamOptimizer()
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            with tf.control_dependencies(update_ops):
+                train_op = optimizer.minimize(loss)
+
+            net = {
+                "predictions": predictions,
+                "loss": loss,
+                "train_op": train_op
+            }
+            return net
+
+    def load(self, load_path):
         checkpoint = tf.train.get_checkpoint_state(load_path)
         if checkpoint and checkpoint.model_checkpoint_path:
             self.saver.restore(self.sess, checkpoint.model_checkpoint_path)
-            U.main_logger.info("Successfully loaded model: Score: {}, Path: {}".
-                               format(state['score'], checkpoint.model_checkpoint_path))
-            self.score = state['score']
             return True
+        return False
 
-    def save_model(self):
-        save_path = get_path('model/' + self.args.env
-                             + '/' + datetime.datetime.now().
-                             strftime('%Y%m%d_%H%M%S'))
-        U.main_logger.info("Save model at {} with score {:.2f}".
-                           format(save_path, self.score))
-        self.saver.save(self.sess, save_path + '/model.ckpt')
-        with open(save_path + '/state.json', 'w') as f:
-            json.dump({'score': self.score, 'args': vars(self.args)}, f)
+    def save(self, save_path):
+        self.saver.save(self.sess, save_path)
+
+    def close(self):
+        self.qi.close()
+        self.sess.close()
