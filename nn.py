@@ -33,7 +33,9 @@ class NN(object):
         self.qi_train.run(self.sess, self.sample_fn)
 
     def train(self):
-        self.sess.run(self.train_net["train_op"])
+        _, loss = self.sess.run(
+            [self.train_net["train_op"], self.train_net["loss"]])
+        return loss
 
     def predict(self, s):
         return self.sess.run(self.pred_net["predictions"],

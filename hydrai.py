@@ -63,7 +63,7 @@ class HydrAI(object):
             p_g = self.nns["good"].predict(conv_s)
             p_n = self.nns["normal"].predict(conv_s)
             p_b = self.nns["bad"].predict(conv_s)
-            p = p_g["pi"][0] + p_n["pi"][0] - p_b["pi"][0]
+            p = 2 * p_g["pi"][0] + p_n["pi"][0] - p_b["pi"][0]
             p += np.ones_like(self.a)
             p /= np.sum(p)
             a = np.random.choice(self.a, p=p)
@@ -80,12 +80,26 @@ class HydrAI(object):
         return replay
 
     def train(self):
+        losses = []
         if len(self.replays["good"]) > 0:
+            _loss = []
             for _ in range(self.replay_size):
-                self.nns["good"].train()
+                _loss.append(self.nns["good"].train())
+            losses.append(sum(_loss) / len(_loss))
+        else:
+            losses.append(0)
         if len(self.replays["normal"]) > 0:
+            _loss = []
             for _ in range(self.replay_size):
-                self.nns["normal"].train()
+                _loss.append(self.nns["normal"].train())
+            losses.append(sum(_loss) / len(_loss))
+        else:
+            losses.append(0)
         if len(self.replays["bad"]) > 0:
+            _loss = []
             for _ in range(self.replay_size):
-                self.nns["bad"].train()
+                _loss.append(self.nns["bad"].train())
+            losses.append(sum(_loss) / len(_loss))
+        else:
+            losses.append(0)
+        return losses

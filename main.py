@@ -8,4 +8,5 @@ for _ in range(max_iter):
     baseline_value = ai.collect_replay()
     print(baseline_value)
     # then we train ai on their certain replays
-    ai.train()
+    loss = ai.train()
+    print(loss)
