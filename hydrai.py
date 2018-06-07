@@ -18,6 +18,8 @@ class HydrAI(object):
         # baseline will determine which replay pack the replay will be put into
         self.baseline = RecentAvg(size=HydrAI.HEADS_N *
                                        self.replay_size, init=0)
+        self.baseline_mid = 0
+        self.baseline_range = 0
         self.replays = {
             "good": ReplayPack(self.replay_size),
             "normal": ReplayPack(self.replay_size),
@@ -45,13 +47,24 @@ class HydrAI(object):
             replay = self.play_one_game()
             self.baseline.update(replay.score)
             collection.append(replay)
+        if self.baseline_mid < self.baseline.value:
+            self.baseline_mid = self.baseline.range / 2
+        self.baseline_range = self.baseline.range
+        print('range: {} {} {}'.format(
+            self.baseline_mid - self.baseline_range * 0.25, self.baseline_mid,
+            self.baseline_mid + self.baseline_range * 0.25))
+        count = [0, 0, 0]
         for replay in collection:
-            if replay.score > self.baseline.value + self.baseline.range * 0.25:
+            if replay.score >= self.baseline_mid + self.baseline_range * 0.25:
                 self.replays["good"].add(replay)
-            elif replay.score < self.baseline.value - self.baseline.range * 0.25:
+                count[0] += 1
+            elif replay.score <= self.baseline_mid - self.baseline_range * 0.25:
                 self.replays["bad"].add(replay)
+                count[2] += 1
             else:
                 self.replays["normal"].add(replay)
+                count[1] += 1
+        print('replay add ', count)
         return self.baseline.value
 
     def play_one_game(self):
@@ -87,6 +100,7 @@ class HydrAI(object):
                 _loss.append(self.nns["good"].train())
             losses.append(sum(_loss) / len(_loss))
         else:
+            print('skip good')
             losses.append(0)
         if len(self.replays["normal"]) > 0:
             _loss = []
@@ -94,6 +108,7 @@ class HydrAI(object):
                 _loss.append(self.nns["normal"].train())
             losses.append(sum(_loss) / len(_loss))
         else:
+            print('skip normal')
             losses.append(0)
         if len(self.replays["bad"]) > 0:
             _loss = []
@@ -101,5 +116,6 @@ class HydrAI(object):
                 _loss.append(self.nns["bad"].train())
             losses.append(sum(_loss) / len(_loss))
         else:
+            print('skip bad')
             losses.append(0)
         return losses
