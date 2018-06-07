@@ -1,172 +1,11 @@
-# Ref: OpenAI baselines
-
-import cv2
-import gym
-import numpy as np
-import time
-
-from collections import deque
-from gym import spaces
-
-
-class MaxEnv(gym.Wrapper):
-    def __init__(self, env=None):
-        """Return only every `skip`-th frame"""
-        super(MaxEnv, self).__init__(env)
-        # most recent raw observations (for max pooling across time steps)
-        self._obs_buffer = deque(maxlen=2)
-
-    def _step(self, action):
-        obs, reward, done, info = self.env.step(action)
-        self._obs_buffer.append(obs)
-        max_frame = np.max(np.stack(self._obs_buffer), axis=0)
-        return max_frame, reward, done, info
-
-    def _reset(self):
-        """Clear past frame buffer and init. to first obs. from inner env."""
-        self._obs_buffer.clear()
-        obs = self.env.reset()
-        self._obs_buffer.append(obs)
-        return obs
-
-
-class ProcessFrame84(gym.ObservationWrapper):
-    def __init__(self, env=None):
-        super(ProcessFrame84, self).__init__(env)
-        self.observation_space = spaces.Box(low=0, high=255, shape=(84, 84, 1))
-
-    def _observation(self, obs):
-        return ProcessFrame84.process(obs)
-
-    @staticmethod
-    def process(frame):
-        if frame.size == 210 * 160 * 3:
-            img = np.reshape(frame, [210, 160, 3]).astype(np.float32)
-        elif frame.size == 250 * 160 * 3:
-            img = np.reshape(frame, [250, 160, 3]).astype(np.float32)
-        else:
-            assert False, "Unknown resolution."
-        img = img[:, :, 0] * 0.299 + img[:, :, 1] * 0.587 + img[:, :, 2] * 0.114
-        resized_screen = cv2.resize(img, (84, 110), interpolation=cv2.INTER_AREA)
-        x_t = resized_screen[18:102, :]
-        x_t = np.reshape(x_t, [84, 84, 1])
-        return x_t.astype(np.uint8)
-
-
-class ClippedRewardsWrapper(gym.RewardWrapper):
-    def _reward(self, reward):
-        """Change all the positive rewards to 1, negative to -1 and keep zero."""
-        return np.sign(reward)
-
-
-class ScaledFloatFrame(gym.ObservationWrapper):
-    def _observation(self, obs):
-        # careful! This undoes the memory optimization, use
-        # with smaller replay buffers only.
-        return np.array(obs).astype(np.float32) / 255.0
-
-
-def wrap_dqn(env):
-    """Apply a common set of wrappers for Atari games."""
-    assert 'NoFrameskip' in env.spec.id
-    env = EpisodicLifeEnv(env)
-    env = NoopResetEnv(env, noop_max=30)
-    env = MaxAndSkipEnv(env, skip=4)
-    if 'FIRE' in env.unwrapped.get_action_meanings():
-        env = FireResetEnv(env)
-    env = ProcessFrame84(env)
-    env = FrameStack(env, 4)
-    env = ClippedRewardsWrapper(env)
-    return env
-
-
-def wrap_gym(env):
-    assert '-v0' in env.spec.id
-    env = EpisodicLifeEnv(env)
-    env = MaxEnv(env)
-    env = ProcessFrame84(env)
-    env = FrameStack(env, 4)
-    return env
-
-
-class SimpleMonitor(gym.Wrapper):
-    def __init__(self, env):
-        """Adds two qunatities to info returned by every step:
-            num_steps: int
-                Number of steps takes so far
-            rewards: [float]
-                All the cumulative rewards for the episodes completed so far.
-        """
-        super().__init__(env)
-        self.reset_state()
-
-    def _reset(self):
-        obs = self.env.reset()
-        # recompute temporary state if needed
-        if self._time_offset is None:
-            self._time_offset = time.time()
-            if len(self._episode_end_times) > 0:
-                self._time_offset -= self._episode_end_times[-1]
-        if self._total_steps is None:
-            self._total_steps = sum(self._episode_lengths)
-        # update monitor state
-        if self._current_reward is not None:
-            self._episode_rewards.append(self._current_reward)
-            self._episode_lengths.append(self._num_steps)
-            self._episode_end_times.append(time.time() - self._time_offset)
-        # reset episode state
-        self._current_reward = 0
-        self._num_steps = 0
-
-        return obs
-
-    def _step(self, action):
-        obs, rew, done, info = self.env.step(action)
-        self._current_reward += rew
-        self._num_steps += 1
-        self._total_steps += 1
-        info['steps'] = self._total_steps
-        info['rewards'] = self._episode_rewards
-        return (obs, rew, done, info)
-
-    def reset_state(self):
-        """Reset monitor state"""
-        # current episode state
-        self._current_reward = None
-        self._num_steps = None
-        # temporary monitor state that we do not save
-        self._time_offset = None
-        self._total_steps = None
-        # monitor state
-        self._episode_rewards = []
-        self._episode_lengths = []
-        self._episode_end_times = []
-        self.reset()
-
-    def get_state(self):
-        return {
-            'env_id': self.env.unwrapped.spec.id,
-            'episode_data': {
-                'episode_rewards': self._episode_rewards,
-                'episode_lengths': self._episode_lengths,
-                'episode_end_times': self._episode_end_times,
-                'initial_reset_time': 0,
-            }
-        }
-
-    def set_state(self, state):
-        assert state['env_id'] == self.env.unwrapped.spec.id
-        ed = state['episode_data']
-        self._episode_rewards = ed['episode_rewards']
-        self._episode_lengths = ed['episode_lengths']
-        self._episode_end_times = ed['episode_end_times']
-
 import numpy as np
 from collections import deque
 import gym
 from gym import spaces
 import cv2
+
 cv2.ocl.setUseOpenCL(False)
+
 
 class NoopResetEnv(gym.Wrapper):
     def __init__(self, env, noop_max=30):
@@ -185,7 +24,8 @@ class NoopResetEnv(gym.Wrapper):
         if self.override_num_noops is not None:
             noops = self.override_num_noops
         else:
-            noops = self.unwrapped.np_random.randint(1, self.noop_max + 1) #pylint: disable=E1101
+            noops = self.unwrapped.np_random.randint(1,
+                                                     self.noop_max + 1)  # pylint: disable=E1101
         assert noops > 0
         obs = None
         for _ in range(noops):
@@ -196,6 +36,7 @@ class NoopResetEnv(gym.Wrapper):
 
     def step(self, ac):
         return self.env.step(ac)
+
 
 class FireResetEnv(gym.Wrapper):
     def __init__(self, env):
@@ -217,6 +58,7 @@ class FireResetEnv(gym.Wrapper):
     def step(self, ac):
         return self.env.step(ac)
 
+
 class EpisodicLifeEnv(gym.Wrapper):
     def __init__(self, env):
         """Make end-of-life == end-of-episode, but only reset on true game over.
@@ -224,7 +66,7 @@ class EpisodicLifeEnv(gym.Wrapper):
         """
         gym.Wrapper.__init__(self, env)
         self.lives = 0
-        self.was_real_done  = True
+        self.was_real_done = True
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
@@ -253,16 +95,15 @@ class EpisodicLifeEnv(gym.Wrapper):
         self.lives = self.env.unwrapped.ale.lives()
         return obs
 
+
 class MaxAndSkipEnv(gym.Wrapper):
     def __init__(self, env, skip=4):
         """Return only every `skip`-th frame"""
         gym.Wrapper.__init__(self, env)
         # most recent raw observations (for max pooling across time steps)
-        self._obs_buffer = np.zeros((2,)+env.observation_space.shape, dtype=np.uint8)
-        self._skip       = skip
-
-    def reset(self):
-        return self.env.reset()
+        self._obs_buffer = np.zeros((2,) + env.observation_space.shape,
+                                    dtype=np.uint8)
+        self._skip = skip
 
     def step(self, action):
         """Repeat action, sum reward, and max over last observations."""
@@ -284,6 +125,7 @@ class MaxAndSkipEnv(gym.Wrapper):
     def reset(self, **kwargs):
         return self.env.reset(**kwargs)
 
+
 class ClipRewardEnv(gym.RewardWrapper):
     def __init__(self, env):
         gym.RewardWrapper.__init__(self, env)
@@ -292,6 +134,7 @@ class ClipRewardEnv(gym.RewardWrapper):
         """Bin reward to {+1, 0, -1} by its sign."""
         return np.sign(reward)
 
+
 class WarpFrame(gym.ObservationWrapper):
     def __init__(self, env):
         """Warp frames to 84x84 as done in the Nature paper and later work."""
@@ -299,19 +142,20 @@ class WarpFrame(gym.ObservationWrapper):
         self.width = 84
         self.height = 84
         self.observation_space = spaces.Box(low=0, high=255,
-            shape=(self.height, self.width, 1), dtype=np.uint8)
+                                            shape=(self.height, self.width, 1),
+                                            dtype=np.uint8)
 
     def observation(self, frame):
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
+        frame = cv2.resize(frame, (self.width, self.height),
+                           interpolation=cv2.INTER_AREA)
         return frame[:, :, None]
+
 
 class FrameStack(gym.Wrapper):
     def __init__(self, env, k):
         """Stack k last frames.
-
         Returns lazy array, which is much more memory efficient.
-
         See Also
         --------
         baselines.common.atari_wrappers.LazyFrames
@@ -320,7 +164,9 @@ class FrameStack(gym.Wrapper):
         self.k = k
         self.frames = deque([], maxlen=k)
         shp = env.observation_space.shape
-        self.observation_space = spaces.Box(low=0, high=255, shape=(shp[0], shp[1], shp[2] * k), dtype=np.uint8)
+        self.observation_space = spaces.Box(low=0, high=255,
+                                            shape=(shp[0], shp[1], shp[2] * k),
+                                            dtype=np.uint8)
 
     def reset(self):
         ob = self.env.reset()
@@ -337,6 +183,7 @@ class FrameStack(gym.Wrapper):
         assert len(self.frames) == self.k
         return LazyFrames(list(self.frames))
 
+
 class ScaledFloatFrame(gym.ObservationWrapper):
     def __init__(self, env):
         gym.ObservationWrapper.__init__(self, env)
@@ -346,22 +193,35 @@ class ScaledFloatFrame(gym.ObservationWrapper):
         # with smaller replay buffers only.
         return np.array(observation).astype(np.float32) / 255.0
 
+
 class LazyFrames(object):
     def __init__(self, frames):
         """This object ensures that common frames between the observations are only stored once.
         It exists purely to optimize memory usage which can be huge for DQN's 1M frames replay
         buffers.
-
         This object should only be converted to numpy array before being passed to the model.
-
         You'd not believe how complex the previous solution was."""
         self._frames = frames
+        self._out = None
+
+    def _force(self):
+        if self._out is None:
+            self._out = np.concatenate(self._frames, axis=2)
+            self._frames = None
+        return self._out
 
     def __array__(self, dtype=None):
-        out = np.concatenate(self._frames, axis=2)
+        out = self._force()
         if dtype is not None:
             out = out.astype(dtype)
         return out
+
+    def __len__(self):
+        return len(self._force())
+
+    def __getitem__(self, i):
+        return self._force()[i]
+
 
 def make_atari(env_id):
     env = gym.make(env_id)
@@ -370,7 +230,9 @@ def make_atari(env_id):
     env = MaxAndSkipEnv(env, skip=4)
     return env
 
-def wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=False, scale=False):
+
+def wrap_deepmind(env, episode_life=True, clip_rewards=True, frame_stack=False,
+                  scale=False):
     """Configure environment for DeepMind-style Atari.
     """
     if episode_life:

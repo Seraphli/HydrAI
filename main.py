@@ -4,5 +4,8 @@ max_iter = 1000
 
 ai = HydrAI()
 for _ in range(max_iter):
-    print(ai.collect_replay())
-    print(ai.train())
+    # first we need to collect replays
+    baseline_value = ai.collect_replay()
+    print(baseline_value)
+    # then we train ai on their certain replays
+    ai.train()

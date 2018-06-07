@@ -40,3 +40,6 @@ class RecentAvg(object):
     @property
     def range(self):
         return self.max - self.min
+
+    def __repr__(self):
+        return str(self.value)

@@ -1,51 +1,57 @@
 import tensorflow as tf
 from tfac.queue_input import QueueInput
 
+
 class ModeKeys(object):
     TRAIN = 'train'
     PREDICT = 'predict'
 
 
 class NN(object):
-    def __init__(self, feature_size, action_size, sample_fn):
+    def __init__(self, feature_size, action_size, sample_fn, prefix):
         self.feature_size = feature_size
         self.action_size = action_size
         self.sample_fn = sample_fn
-        self.build_input()
-        idx, batch_features, batch_labels = self.qi.build_op(32)
-        idx, pred_features, pred_labels = self.qi.build_op(1)
-        self.train_net = self.build_net(batch_features, batch_labels,
-                                        ModeKeys.TRAIN, False, "mcts_")
-        self.pred_net = self.build_net(pred_features, pred_labels,
-                                       ModeKeys.PREDICT, tf.AUTO_REUSE, "mcts_")
-        self.sess = tf.InteractiveSession()
-        self.saver = tf.train.Saver(max_to_keep=10)
-        init_op = tf.global_variables_initializer()
-        self.sess.run(init_op)
-        self.sess.graph.finalize()
-        self.is_qi_run = False
+        graph = tf.Graph()
+        with graph.as_default():
+            self.build_input()
+            idx, batch_features, batch_labels = self.qi_train.build_op(32)
+            self.train_net = self.build_net(
+                batch_features, batch_labels,
+                ModeKeys.TRAIN, False, prefix + "hydrai_")
+            self.pred_net = self.build_net(
+                self.features_predict, {},
+                ModeKeys.PREDICT, tf.AUTO_REUSE, prefix + 'hydrai_')
+            self.sess = tf.InteractiveSession()
+            self.saver = tf.train.Saver(max_to_keep=10)
+            init_op = tf.global_variables_initializer()
+            self.sess.run(init_op)
+            self.run()
+            self.sess.graph.finalize()
 
     def run(self):
-        self.qi.run(self.sess, self.sample_fn)
+        self.qi_train.run(self.sess, self.sample_fn)
 
     def train(self):
-        if not self.is_qi_run:
-            self.run()
         self.sess.run(self.train_net["train_op"])
 
-    def predict(self):
-        return self.sess.run(self.pred_net["predictions"])
+    def predict(self, s):
+        return self.sess.run(self.pred_net["predictions"],
+                             feed_dict={self.features_predict["s"]: s})
 
     def build_input(self):
-        self.features = {
-            "s": tf.placeholder(tf.float32, [None, *self.feature_size])
+        self.features_train = {
+            "s": tf.placeholder(tf.float32, (None, *self.feature_size))
+        }
+        self.labels_train = {
+            "a": tf.placeholder(tf.int32, (None,))
         }
 
-        self.labels = {
-            "pi": tf.placeholder(tf.float32, [None, self.action_size]),
-            "z": tf.placeholder(tf.float32, [None, 1]),
+        self.features_predict = {
+            "s": tf.placeholder(tf.float32, (None, *self.feature_size))
         }
-        self.qi = QueueInput(self.features, self.labels, [400, 20])
+        self.qi_train = QueueInput(self.features_train, self.labels_train,
+                                   [320, 320])
 
     def build_net(self, features, labels, mode, reuse, prefix):
         training = mode == ModeKeys.TRAIN
@@ -79,18 +85,9 @@ class NN(object):
                 momentum=0.997, epsilon=1e-5, name="bn_4")
             pi = tf.layers.dense(pi, self.action_size,
                                  name="pi_dense_2")
-            v = tf.layers.flatten(x)
-            v = tf.layers.dense(v, 512, activation=tf.nn.relu,
-                                name="v_dense_1")
-            v = tf.layers.batch_normalization(
-                v, training=training,
-                momentum=0.997, epsilon=1e-5, name="bn_5")
-            v = tf.layers.dense(v, 1, name="v_dense_2")
-            v = tf.nn.sigmoid(v)
 
             predictions = {
-                "pi": tf.nn.softmax(pi, name="pi"),
-                "v": tf.identity(v, name="v")
+                "pi": tf.nn.softmax(pi, name="pi")
             }
 
             if mode == ModeKeys.PREDICT:
@@ -98,13 +95,11 @@ class NN(object):
                 return net
 
             with tf.name_scope("loss"):
-                epsilon = 1e-10
-                mse_loss = tf.losses.mean_squared_error(labels["z"], v)
-                cross_entropy = (labels["pi"] + epsilon) * tf.log(pi + epsilon)
-                ce_loss = tf.reduce_mean(-tf.reduce_sum(cross_entropy, 1))
-                l2_loss = 1e-4 * tf.add_n([tf.nn.l2_loss(v)
-                                           for v in tf.trainable_variables()])
-                loss = mse_loss + ce_loss + l2_loss
+                ce_loss = tf.losses.sparse_softmax_cross_entropy(
+                    labels["a"], pi)
+                l2_loss = 1e-4 * tf.add_n([tf.nn.l2_loss(var)
+                                           for var in tf.trainable_variables()])
+                loss = ce_loss + l2_loss
 
             optimizer = tf.train.AdamOptimizer()
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -129,5 +124,5 @@ class NN(object):
         self.saver.save(self.sess, save_path)
 
     def close(self):
-        self.qi.close()
+        self.qi_train.close()
         self.sess.close()

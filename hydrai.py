@@ -2,13 +2,20 @@ from util import RecentAvg
 from replay import Replay, ReplayPack
 from nn import NN
 import numpy as np
+from wrapper import wrap_deepmind
+import gym
+from functools import partial
 
 
 class HydrAI(object):
     HEADS_N = 3
 
     def __init__(self):
+        self.env = gym.make("BreakoutNoFrameskip-v4")
+        self.env = wrap_deepmind(self.env, frame_stack=True, scale=True)
         self.replay_size = 40
+        # setup baseline
+        # baseline will determine which replay pack the replay will be put into
         self.baseline = RecentAvg(size=HydrAI.HEADS_N *
                                        self.replay_size, init=0)
         self.replays = {
@@ -16,16 +23,25 @@ class HydrAI(object):
             "normal": ReplayPack(self.replay_size),
             "bad": ReplayPack(self.replay_size)
         }
+        feature_size = self.env.observation_space.shape
+        action_size = self.env.action_space.n
         self.nns = {
-            "good": NN(),
-            "normal": NN(),
-            "bad": NN()
+            "good": NN(feature_size, action_size,
+                       [partial(self.replays["good"].sample, 32)],
+                       "good_"),
+            "normal": NN(feature_size, action_size,
+                         [partial(self.replays["normal"].sample, 32)],
+                         "normal_"),
+            "bad": NN(feature_size, action_size,
+                      [partial(self.replays["bad"].sample, 32)],
+                      "bad_")
         }
-        self.a = list(range(10))
+        self.a = list(range(action_size))
 
     def collect_replay(self):
         collection = []
-        for _ in range(HydrAI.HEADS_N * self.replay_size):
+        for _ in range(self.replay_size):
+            print("playing {}".format(_), end="")
             replay = self.play_one_game()
             self.baseline.update(replay.score)
             collection.append(replay)
@@ -40,24 +56,36 @@ class HydrAI(object):
 
     def play_one_game(self):
         replay = Replay()
-        self.env.reset()
+        s = self.env.reset()
+        count = 0
         while True:
-            s, r, t, _ = self.env.step()
-            p_g = self.nns["good"].predict(s)
-            p_n = self.nns["normal"].predict(s)
-            p_b = self.nns["bad"].predict(s)
-            p = p_g + p_n - p_b
+            conv_s = np.reshape(s, [1, 84, 84, 4])
+            p_g = self.nns["good"].predict(conv_s)
+            p_n = self.nns["normal"].predict(conv_s)
+            p_b = self.nns["bad"].predict(conv_s)
+            p = p_g["pi"][0] + p_n["pi"][0] - p_b["pi"][0]
+            p += np.ones_like(self.a)
             p /= np.sum(p)
             a = np.random.choice(self.a, p=p)
+            s_, r, t, _ = self.env.step(a)
             replay.add(s, a)
             replay.score += r
-            if self.env.is_done():
+            s = s_
+            count += 1
+            if count % 10 == 0:
+                print(".", end="", flush=True)
+            if t:
+                print()
                 break
         return replay
 
     def train(self):
-        loss = []
-        loss.append(self.nns["good"].train(self.replays["good"].data))
-        loss.append(self.nns["normal"].train(self.replays["normal"].data))
-        loss.append(self.nns["bad"].train(self.replays["bad"].data))
-        return loss
+        if len(self.replays["good"]) > 0:
+            for _ in range(self.replay_size):
+                self.nns["good"].train()
+        if len(self.replays["normal"]) > 0:
+            for _ in range(self.replay_size):
+                self.nns["normal"].train()
+        if len(self.replays["bad"]) > 0:
+            for _ in range(self.replay_size):
+                self.nns["bad"].train()
