@@ -62,29 +62,35 @@ class NN(object):
             b_init = tf.constant_initializer(0.1)
             x = features["s"]
             x = tf.layers.conv2d(
-                x, 32, 8, 4, activation=tf.nn.relu, name="conv_1",
+                x, 32, 4, 2, activation=tf.nn.relu, name="conv_1",
                 kernel_initializer=w_init, bias_initializer=b_init)
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_1")
             x = tf.layers.conv2d(
-                x, 64, 4, 2, activation=tf.nn.relu, name="conv_2",
+                x, 32, 4, 2, activation=tf.nn.relu, name="conv_2",
                 kernel_initializer=w_init, bias_initializer=b_init)
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_2")
             x = tf.layers.conv2d(
-                x, 64, 3, 1, activation=tf.nn.relu, name="conv_3",
+                x, 64, 4, 2, activation=tf.nn.relu, name="conv_3",
                 kernel_initializer=w_init, bias_initializer=b_init)
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_3")
+            x = tf.layers.conv2d(
+                x, 64, 3, 1, activation=tf.nn.relu, name="conv_4",
+                kernel_initializer=w_init, bias_initializer=b_init)
+            x = tf.layers.batch_normalization(
+                x, training=training,
+                momentum=0.997, epsilon=1e-5, name="bn_4")
             pi = tf.layers.flatten(x)
             pi = tf.layers.dense(pi, 512, activation=tf.nn.relu,
                                  name="pi_dense_1")
             pi = tf.layers.batch_normalization(
                 pi, training=training,
-                momentum=0.997, epsilon=1e-5, name="bn_4")
+                momentum=0.997, epsilon=1e-5, name="bn_5")
             pi = tf.layers.dense(pi, self.action_size,
                                  name="pi_dense_2")
 
@@ -99,9 +105,10 @@ class NN(object):
             with tf.name_scope("loss"):
                 ce_loss = tf.losses.sparse_softmax_cross_entropy(
                     labels["a"], pi)
-                l2_loss = 1e-4 * tf.add_n([tf.nn.l2_loss(var)
-                                           for var in tf.trainable_variables()])
-                loss = ce_loss + l2_loss
+                # l2_loss = 1e-4 * tf.add_n([tf.nn.l2_loss(var)
+                #                            for var in tf.trainable_variables()])
+                # loss = ce_loss + l2_loss
+                loss = ce_loss
 
             optimizer = tf.train.AdamOptimizer()
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)

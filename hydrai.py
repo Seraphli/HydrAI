@@ -1,4 +1,4 @@
-from util import RecentAvg
+from util import RecentAvg, init_logger, get_run_timestamp
 from replay import Replay, ReplayPack
 from nn import NN
 import numpy as np
@@ -11,9 +11,10 @@ class HydrAI(object):
     HEADS_N = 3
 
     def __init__(self):
+        self.logger = init_logger(get_run_timestamp())
         self.env = gym.make("BreakoutNoFrameskip-v4")
         self.env = wrap_deepmind(self.env, frame_stack=True, scale=True)
-        self.replay_size = 40
+        self.replay_size = 50
         # setup baseline
         # baseline will determine which replay pack the replay will be put into
         self.baseline = RecentAvg(size=HydrAI.HEADS_N *
@@ -43,14 +44,16 @@ class HydrAI(object):
     def collect_replay(self):
         collection = []
         for _ in range(self.replay_size):
-            print("playing {}".format(_), end="")
+            print(".", end="", flush=True)
             replay = self.play_one_game()
+            self.logger.debug(replay.score)
             self.baseline.update(replay.score)
             collection.append(replay)
+        print()
         if self.baseline_mid < self.baseline.value:
             self.baseline_mid = self.baseline.range / 2
         self.baseline_range = self.baseline.range
-        print('range: {} {} {}'.format(
+        self.logger.debug('range: {} {} {}'.format(
             self.baseline_mid - self.baseline_range * 0.25, self.baseline_mid,
             self.baseline_mid + self.baseline_range * 0.25))
         count = [0, 0, 0]
@@ -64,58 +67,61 @@ class HydrAI(object):
             else:
                 self.replays["normal"].add(replay)
                 count[1] += 1
-        print('replay add ', count)
+        self.logger.info('replay add {}'.format(count))
+        self.logger.info('v: {}'.format(self.baseline.value))
+        if count[2] > int(self.replay_size * 0.75):
+            self.logger.warning('bad replay size larger than threshold')
         return self.baseline.value
 
     def play_one_game(self):
         replay = Replay()
         s = self.env.reset()
-        count = 0
         while True:
             conv_s = np.reshape(s, [1, 84, 84, 4])
             p_g = self.nns["good"].predict(conv_s)
+            self.logger.debug("p_g: {}".format(p_g["pi"][0]))
             p_n = self.nns["normal"].predict(conv_s)
+            self.logger.debug("p_n: {}".format(p_n["pi"][0]))
             p_b = self.nns["bad"].predict(conv_s)
+            self.logger.debug("p_b: {}".format(p_b["pi"][0]))
             p = 2 * p_g["pi"][0] + p_n["pi"][0] - p_b["pi"][0]
+            self.logger.debug("p: {}".format(p))
             p += np.ones_like(self.a)
             p /= np.sum(p)
+            self.logger.debug("p: {}".format(p))
             a = np.random.choice(self.a, p=p)
+            self.logger.debug("a: {}".format(a))
             s_, r, t, _ = self.env.step(a)
             replay.add(s, a)
             replay.score += r
             s = s_
-            count += 1
-            if count % 10 == 0:
-                print(".", end="", flush=True)
             if t:
-                print()
                 break
         return replay
 
     def train(self):
+        self.logger.info("train")
         losses = []
         if len(self.replays["good"]) > 0:
             _loss = []
-            for _ in range(self.replay_size):
+            for _ in range(self.replay_size * 5):
                 _loss.append(self.nns["good"].train())
             losses.append(sum(_loss) / len(_loss))
         else:
-            print('skip good')
             losses.append(0)
         if len(self.replays["normal"]) > 0:
             _loss = []
-            for _ in range(self.replay_size):
+            for _ in range(self.replay_size * 5):
                 _loss.append(self.nns["normal"].train())
             losses.append(sum(_loss) / len(_loss))
         else:
-            print('skip normal')
             losses.append(0)
         if len(self.replays["bad"]) > 0:
             _loss = []
-            for _ in range(self.replay_size):
+            for _ in range(self.replay_size * 5):
                 _loss.append(self.nns["bad"].train())
             losses.append(sum(_loss) / len(_loss))
         else:
-            print('skip bad')
             losses.append(0)
+        self.logger.info('loss: {}'.format(losses))
         return losses
