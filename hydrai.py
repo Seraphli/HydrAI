@@ -30,15 +30,14 @@ class HydrAI(object):
         action_size = self.env.action_space.n
         self.nns = {
             "good": NN(feature_size, action_size,
-                       [partial(self.replays["good"].sample, 32)],
-                       "good_"),
+                       [partial(self.replays["good"].sample, 32)], "good"),
             "normal": NN(feature_size, action_size,
                          [partial(self.replays["normal"].sample, 32)],
-                         "normal_"),
+                         "normal"),
             "bad": NN(feature_size, action_size,
-                      [partial(self.replays["bad"].sample, 32)],
-                      "bad_")
+                      [partial(self.replays["bad"].sample, 32)], "bad")
         }
+        self.logger.info('network initialized')
         self.a = list(range(action_size))
 
     def collect_replay(self):

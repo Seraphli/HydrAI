@@ -18,23 +18,27 @@ class NN(object):
             idx, batch_features, batch_labels = self.qi_train.build_op(32)
             self.train_net = self.build_net(
                 batch_features, batch_labels,
-                ModeKeys.TRAIN, False, prefix + "hydrai_")
+                ModeKeys.TRAIN, False, prefix)
             self.pred_net = self.build_net(
                 self.features_predict, {},
-                ModeKeys.PREDICT, tf.AUTO_REUSE, prefix + 'hydrai_')
+                ModeKeys.PREDICT, tf.AUTO_REUSE, prefix)
             self.sess = tf.InteractiveSession()
             self.saver = tf.train.Saver(max_to_keep=10)
             init_op = tf.global_variables_initializer()
             self.sess.run(init_op)
             self.run()
             self.sess.graph.finalize()
+            self.summary_writer = tf.summary.FileWriter('tf_log/' + prefix,
+                                                        self.sess.graph)
 
     def run(self):
         self.qi_train.run(self.sess, self.sample_fn)
 
     def train(self):
-        _, loss = self.sess.run(
-            [self.train_net["train_op"], self.train_net["loss"]])
+        _, loss, merged, step = self.sess.run(
+            [self.train_net["train_op"], self.train_net["loss"],
+             self.train_net["merged"], self.train_net["global_step"]])
+        self.summary_writer.add_summary(merged, step)
         return loss
 
     def predict(self, s):
@@ -64,35 +68,41 @@ class NN(object):
             x = tf.layers.conv2d(
                 x, 32, 4, 2, activation=tf.nn.relu, name="conv_1",
                 kernel_initializer=w_init, bias_initializer=b_init)
+            tf.summary.histogram('conv_1/activation', x)
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_1")
             x = tf.layers.conv2d(
                 x, 32, 4, 2, activation=tf.nn.relu, name="conv_2",
                 kernel_initializer=w_init, bias_initializer=b_init)
+            tf.summary.histogram('conv_2/activation', x)
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_2")
             x = tf.layers.conv2d(
                 x, 64, 4, 2, activation=tf.nn.relu, name="conv_3",
                 kernel_initializer=w_init, bias_initializer=b_init)
+            tf.summary.histogram('conv_3/activation', x)
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_3")
             x = tf.layers.conv2d(
                 x, 64, 3, 1, activation=tf.nn.relu, name="conv_4",
                 kernel_initializer=w_init, bias_initializer=b_init)
+            tf.summary.histogram('conv_4/activation', x)
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_4")
             pi = tf.layers.flatten(x)
             pi = tf.layers.dense(pi, 512, activation=tf.nn.relu,
                                  name="pi_dense_1")
+            tf.summary.histogram('pi_dense_1/activation', x)
             pi = tf.layers.batch_normalization(
                 pi, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_5")
             pi = tf.layers.dense(pi, self.action_size,
                                  name="pi_dense_2")
+            tf.summary.histogram('pi_dense_2/activation', x)
 
             predictions = {
                 "pi": tf.nn.softmax(pi, name="pi")
@@ -110,15 +120,20 @@ class NN(object):
                 # loss = ce_loss + l2_loss
                 loss = ce_loss
 
+            global_step = tf.train.get_or_create_global_step()
             optimizer = tf.train.AdamOptimizer()
-            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+            update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS, prefix)
             with tf.control_dependencies(update_ops):
-                train_op = optimizer.minimize(loss)
+                train_op = optimizer.minimize(loss, global_step=global_step)
+
+            merged = tf.summary.merge_all()
 
             net = {
                 "predictions": predictions,
                 "loss": loss,
-                "train_op": train_op
+                "train_op": train_op,
+                "merged": merged,
+                "global_step": global_step
             }
             return net
 
