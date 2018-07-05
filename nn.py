@@ -12,6 +12,7 @@ class NN(object):
         self.feature_size = feature_size
         self.action_size = action_size
         self.sample_fn = sample_fn
+        self.summary = []
         graph = tf.Graph()
         with graph.as_default():
             self.build_input()
@@ -63,49 +64,45 @@ class NN(object):
         training = mode == ModeKeys.TRAIN
         with tf.variable_scope(prefix, reuse=reuse):
             w_init = tf.contrib.layers.xavier_initializer()
-            b_init = tf.constant_initializer(0.1)
+            b_init = tf.contrib.layers.xavier_initializer()
             x = features["s"]
             x = tf.layers.conv2d(
-                x, 32, 4, 2, activation=tf.nn.relu, name="conv_1",
+                x, 64, 4, 2, activation=tf.nn.relu, name="conv_1",
                 kernel_initializer=w_init, bias_initializer=b_init)
-            tf.summary.histogram('conv_1/activation', x)
+            self.summary.append(tf.summary.histogram('conv_1/activation', x))
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_1")
             x = tf.layers.conv2d(
-                x, 32, 4, 2, activation=tf.nn.relu, name="conv_2",
+                x, 64, 4, 2, activation=tf.nn.relu, name="conv_2",
                 kernel_initializer=w_init, bias_initializer=b_init)
-            tf.summary.histogram('conv_2/activation', x)
+            self.summary.append(tf.summary.histogram('conv_2/activation', x))
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_2")
             x = tf.layers.conv2d(
                 x, 64, 4, 2, activation=tf.nn.relu, name="conv_3",
                 kernel_initializer=w_init, bias_initializer=b_init)
-            tf.summary.histogram('conv_3/activation', x)
+            self.summary.append(tf.summary.histogram('conv_3/activation', x))
             x = tf.layers.batch_normalization(
                 x, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_3")
-            x = tf.layers.conv2d(
-                x, 64, 3, 1, activation=tf.nn.relu, name="conv_4",
-                kernel_initializer=w_init, bias_initializer=b_init)
-            tf.summary.histogram('conv_4/activation', x)
-            x = tf.layers.batch_normalization(
-                x, training=training,
-                momentum=0.997, epsilon=1e-5, name="bn_4")
             pi = tf.layers.flatten(x)
             pi = tf.layers.dense(pi, 512, activation=tf.nn.relu,
                                  name="pi_dense_1")
-            tf.summary.histogram('pi_dense_1/activation', x)
+            self.summary.append(
+                tf.summary.histogram('pi_dense_1/activation', x))
             pi = tf.layers.batch_normalization(
                 pi, training=training,
                 momentum=0.997, epsilon=1e-5, name="bn_5")
             pi = tf.layers.dense(pi, self.action_size,
                                  name="pi_dense_2")
-            tf.summary.histogram('pi_dense_2/activation', x)
+            self.summary.append(
+                tf.summary.histogram('pi_dense_2/activation', x))
 
             for var in tf.trainable_variables():
-                tf.summary.histogram(var.name[len(prefix):], var)
+                self.summary.append(tf.summary.histogram(
+                    var.name[len(prefix):], var))
 
             predictions = {
                 "pi": tf.nn.softmax(pi, name="pi")
@@ -122,9 +119,9 @@ class NN(object):
                                            for var in tf.trainable_variables()])
                 loss = ce_loss + l2_loss
 
-            tf.summary.scalar('ce_loss', ce_loss)
-            tf.summary.scalar('l2_loss', l2_loss)
-            tf.summary.scalar('loss', loss)
+            self.summary.append(tf.summary.scalar('ce_loss', ce_loss))
+            self.summary.append(tf.summary.scalar('l2_loss', l2_loss))
+            self.summary.append(tf.summary.scalar('loss', loss))
 
             global_step = tf.train.get_or_create_global_step()
             optimizer = tf.train.AdamOptimizer()
@@ -132,7 +129,7 @@ class NN(object):
             with tf.control_dependencies(update_ops):
                 train_op = optimizer.minimize(loss, global_step=global_step)
 
-            merged = tf.summary.merge_all()
+            merged = tf.summary.merge(self.summary)
 
             net = {
                 "predictions": predictions,
