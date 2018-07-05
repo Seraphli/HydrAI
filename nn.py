@@ -104,6 +104,9 @@ class NN(object):
                                  name="pi_dense_2")
             tf.summary.histogram('pi_dense_2/activation', x)
 
+            for var in tf.trainable_variables():
+                tf.summary.histogram(var.name[len(prefix):], var)
+
             predictions = {
                 "pi": tf.nn.softmax(pi, name="pi")
             }
@@ -115,10 +118,13 @@ class NN(object):
             with tf.name_scope("loss"):
                 ce_loss = tf.losses.sparse_softmax_cross_entropy(
                     labels["a"], pi)
-                # l2_loss = 1e-4 * tf.add_n([tf.nn.l2_loss(var)
-                #                            for var in tf.trainable_variables()])
-                # loss = ce_loss + l2_loss
-                loss = ce_loss
+                l2_loss = 1e-4 * tf.add_n([tf.nn.l2_loss(var)
+                                           for var in tf.trainable_variables()])
+                loss = ce_loss + l2_loss
+
+            tf.summary.scalar('ce_loss', ce_loss)
+            tf.summary.scalar('l2_loss', l2_loss)
+            tf.summary.scalar('loss', loss)
 
             global_step = tf.train.get_or_create_global_step()
             optimizer = tf.train.AdamOptimizer()

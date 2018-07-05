@@ -78,18 +78,12 @@ class HydrAI(object):
         while True:
             conv_s = np.reshape(s, [1, 84, 84, 4])
             p_g = self.nns["good"].predict(conv_s)
-            self.logger.debug("p_g: {}".format(p_g["pi"][0]))
             p_n = self.nns["normal"].predict(conv_s)
-            self.logger.debug("p_n: {}".format(p_n["pi"][0]))
             p_b = self.nns["bad"].predict(conv_s)
-            self.logger.debug("p_b: {}".format(p_b["pi"][0]))
             p = 2 * p_g["pi"][0] + p_n["pi"][0] - p_b["pi"][0]
-            self.logger.debug("p: {}".format(p))
             p += np.ones_like(self.a)
             p /= np.sum(p)
-            self.logger.debug("p: {}".format(p))
             a = np.random.choice(self.a, p=p)
-            self.logger.debug("a: {}".format(a))
             s_, r, t, _ = self.env.step(a)
             replay.add(s, a)
             replay.score += r
