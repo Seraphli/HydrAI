@@ -124,7 +124,7 @@ class NN(object):
             self.summary.append(tf.summary.scalar('loss', loss))
 
             global_step = tf.train.get_or_create_global_step()
-            optimizer = tf.train.AdamOptimizer()
+            optimizer = tf.train.AdamOptimizer(1e-4)
             update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS, prefix)
             with tf.control_dependencies(update_ops):
                 train_op = optimizer.minimize(loss, global_step=global_step)
